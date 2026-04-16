@@ -10,6 +10,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlencode
 
 import requests
 import urllib3
@@ -178,12 +179,12 @@ def resolve_recipients_via_api(ad_logins: list[str]) -> list[ResolvedRecipient]:
     if not ad_logins:
         return []
 
-    params: list[tuple[str, str]] = [("ad_login", login) for login in ad_logins]
-    logger.debug("Resolving recipients via API url=%s count=%s", cnf.RECIPIENT_RESOLVER_URL, len(ad_logins))
+    query = urlencode({"ad_login": ad_logins}, doseq=True)
+    resolver_url = f"{cnf.RECIPIENT_RESOLVER_URL}?{query}"
+    logger.debug("Resolving recipients via API url=%s count=%s", resolver_url, len(ad_logins))
 
     response = requests.get(
-        cnf.RECIPIENT_RESOLVER_URL,
-        params=params,
+        resolver_url,
         verify=cnf.VERIFY_SSL,
         timeout=cnf.REQUEST_TIMEOUT,
     )
