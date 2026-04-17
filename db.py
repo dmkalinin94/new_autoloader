@@ -17,7 +17,7 @@ DB_PASSWORD = "password"
 DB_PORT = 5432
 DB_OPTIONS = ""
 
-SQL_GET_LAST_THREAD_ID = """
+SQL_GET_LAST_THREAD_ROOT_EVENT_ID = """
 SELECT r_discussion_id
 FROM trmetrics.availconf.conf
 WHERE insight_id = %(insight_id)s
@@ -95,17 +95,20 @@ def get_db_connection() -> PgConnection:
         options=DB_OPTIONS,
     )
 
+
 def get_active_incident_count(insight_id: str) -> int:
     with get_db_connection() as conn, conn.cursor() as cur:
         cur.execute(SQL_COUNT_ACTIVE_INCIDENTS, {"insight_id": insight_id})
         row = cur.fetchone()
     return int(row[0]) if row else 0
 
-def get_last_thread_id(insight_id: str) -> str | None:
+
+def get_last_thread_root_event_id(insight_id: str) -> str | None:
     with get_db_connection() as conn, conn.cursor() as cur:
-        cur.execute(SQL_GET_LAST_THREAD_ID, {"insight_id": insight_id})
+        cur.execute(SQL_GET_LAST_THREAD_ROOT_EVENT_ID, {"insight_id": insight_id})
         row = cur.fetchone()
     return str(row[0]).strip() if row and row[0] else None
+
 
 def get_last_jira_issue_key(insight_id: str) -> str | None:
     with get_db_connection() as conn, conn.cursor() as cur:
@@ -113,9 +116,11 @@ def get_last_jira_issue_key(insight_id: str) -> str | None:
         row = cur.fetchone()
     return str(row[0]).strip() if row and row[0] else None
 
+
 def close_open_incidents(insight_id: str) -> None:
     with get_db_connection() as conn, conn.cursor() as cur:
         cur.execute(SQL_CLOSE_INCIDENTS, {"insight_id": insight_id})
+
 
 def update_event_counter(insight_id: str, delta: int) -> int:
     with get_db_connection() as conn, conn.cursor() as cur:
@@ -126,6 +131,7 @@ def update_event_counter(insight_id: str, delta: int) -> int:
         raise RuntimeError(f"update_event_counter returned no rows for insight_id={insight_id}")
 
     return int(row[0])
+
 
 def create_internal_incident(
     insight_id: str,
@@ -149,3 +155,8 @@ def create_internal_incident(
     }
     with get_db_connection() as conn, conn.cursor() as cur:
         cur.execute(SQL_CREATE_INCIDENT, values)
+
+
+def get_last_thread_id(insight_id: str) -> str | None:
+    """Backward-compatible alias for old function name."""
+    return get_last_thread_root_event_id(insight_id)
