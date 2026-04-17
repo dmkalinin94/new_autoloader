@@ -35,14 +35,48 @@ def _safe_bot_endpoint(endpoint: str) -> str:
 
 def _bot_request(method: str, endpoint: str, **kwargs: Any) -> requests.Response:
     url = _bot_api_url(endpoint)
-    logger.debug("KTalk Bot API request method=%s endpoint=%s", method, endpoint)
-    return requests.request(
-        method,
-        url,
-        verify=cnf.VERIFY_SSL,
-        timeout=cnf.REQUEST_TIMEOUT,
-        **kwargs,
-    )
+    retries = max(int(getattr(cnf, "KTALK_REQUEST_RETRIES", 3)), 1)
+    retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.request(
+                method,
+                url,
+                verify=cnf.VERIFY_SSL,
+                timeout=cnf.REQUEST_TIMEOUT,
+                **kwargs,
+            )
+        except requests.RequestException as error:
+            if attempt < retries:
+                logger.warning(
+                    "KTalk request failed on attempt %s/%s, retry in %s seconds: %s",
+                    attempt,
+                    retries,
+                    retry_delay_seconds,
+                    error,
+                )
+                time.sleep(retry_delay_seconds)
+                continue
+            logger.error("KTalk request failed after all retries: %s", error)
+            raise
+
+        if response.status_code >= 500 and attempt < retries:
+            logger.warning(
+                "KTalk request failed on attempt %s/%s with status=%s, retry in %s seconds",
+                attempt,
+                retries,
+                response.status_code,
+                retry_delay_seconds,
+            )
+            time.sleep(retry_delay_seconds)
+            continue
+
+        if attempt > 1:
+            logger.info("KTalk request succeeded on attempt %s/%s", attempt, retries)
+        return response
+
+    raise RuntimeError("KTalk request retry loop ended unexpectedly")
 
 
 def send_to_ktalk_message(
@@ -81,29 +115,13 @@ def send_to_ktalk_message(
         _safe_bot_endpoint("send_message"),
     )
 
-    retries = max(int(cnf.KTALK_SEND_RETRIES), 1)
-    retry_delay = float(cnf.KTALK_SEND_RETRY_DELAY_SEC)
-    response: requests.Response | None = None
-
-    for attempt in range(1, retries + 1):
+    try:
         response = _bot_request("POST", "send_message", json=payload)
-        if response.ok:
-            break
+    except requests.RequestException:
+        return None
 
-        logger.warning(
-            "Kontur Talk send attempt failed status=%s attempt=%s/%s",
-            response.status_code,
-            attempt,
-            retries,
-        )
-
-        if response.status_code < 500 or attempt == retries:
-            break
-
-        time.sleep(retry_delay)
-
-    if response is None or not response.ok:
-        status = response.status_code if response is not None else "n/a"
+    if not response.ok:
+        status = response.status_code
         logger.error("Kontur Talk send failed status=%s", status)
         return None
 

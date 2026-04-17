@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -42,6 +43,51 @@ def _common_headers() -> dict[str, str]:
     }
 
 
+def _request_with_retry(method: str, url: str, **kwargs: object) -> requests.Response | None:
+    retries = max(int(getattr(cnf, "KTALK_REQUEST_RETRIES", 3)), 1)
+    retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.request(
+                method,
+                url,
+                verify=cnf.VERIFY_SSL,
+                timeout=cnf.REQUEST_TIMEOUT,
+                **kwargs,
+            )
+        except requests.RequestException as error:
+            if attempt < retries:
+                logger.warning(
+                    "KTalk request failed on attempt %s/%s, retry in %s seconds: %s",
+                    attempt,
+                    retries,
+                    retry_delay_seconds,
+                    error,
+                )
+                time.sleep(retry_delay_seconds)
+                continue
+            logger.error("KTalk request failed after all retries: %s", error)
+            return None
+
+        if response.status_code >= 500 and attempt < retries:
+            logger.warning(
+                "KTalk request failed on attempt %s/%s with status=%s, retry in %s seconds",
+                attempt,
+                retries,
+                response.status_code,
+                retry_delay_seconds,
+            )
+            time.sleep(retry_delay_seconds)
+            continue
+
+        if attempt > 1:
+            logger.info("KTalk request succeeded on attempt %s/%s", attempt, retries)
+        return response
+
+    return None
+
+
 def get_room_members(room_id: str) -> set[str]:
     logger.debug("Loading room members room_id=%s", room_id)
 
@@ -49,12 +95,14 @@ def get_room_members(room_id: str) -> set[str]:
     room_path = quote(room_id, safe="!:$")
     members_url = f"{base}/_matrix/client/v3/rooms/{room_path}/members"
 
-    response = requests.get(
+    response = _request_with_retry(
+        "GET",
         members_url,
         headers=_common_headers(),
-        verify=cnf.VERIFY_SSL,
-        timeout=cnf.REQUEST_TIMEOUT,
     )
+    if response is None:
+        logger.error("KTalk members request failed after all retries room_id=%s", room_id)
+        return set()
     response.encoding = "utf-8"
 
     if not response.ok:
@@ -92,13 +140,15 @@ def invite_user_to_room(room_id: str, user_id: str) -> bool:
     payload = {"user_id": user_id}
 
     logger.info("KTalk bearer invite start room_id=%s user_id=%s", room_id, user_id)
-    response = requests.post(
+    response = _request_with_retry(
+        "POST",
         invite_url,
         headers=_common_headers(),
         json=payload,
-        verify=cnf.VERIFY_SSL,
-        timeout=cnf.REQUEST_TIMEOUT,
     )
+    if response is None:
+        logger.error("KTalk bearer invite failed after all retries room_id=%s user_id=%s", room_id, user_id)
+        return False
     response.encoding = "utf-8"
 
     if not response.ok:

@@ -25,6 +25,7 @@ from db import (
     get_last_closed_incident_for_reopen,
     get_last_jira_issue_key,
     get_last_thread_root_event_id,
+    mark_last_closed_incident_timestamp,
     update_event_counter,
 )
 from jira_client import JiraServiceData, create_jira_incident, get_jira_data, validate_jira_incident_status
@@ -580,6 +581,8 @@ def process_close_event(payload: EventPayload) -> None:
         return
 
     logger.info("Decision: event balance reached zero, finalize incident")
+    close_timestamp_saved = mark_last_closed_incident_timestamp(payload.insight_id)
+    logger.info("Step: mark close_event_at for last closed incident | saved=%s", close_timestamp_saved)
 
     if jira_issue_key:
         jira_issue_is_active = validate_jira_incident_status(jira_issue_key)

@@ -131,8 +131,8 @@ Dry-run режим инвайтов включен. Пользователей �
 - `KTALK_BOT_USER`
 - `KTALK_JWT_TOKEN`
 - `KTALK_ROOM_ID`
-- `KTALK_SEND_RETRIES`
-- `KTALK_SEND_RETRY_DELAY_SEC`
+- `KTALK_REQUEST_RETRIES` — сколько попыток делать для KTalk HTTP-вызовов
+- `KTALK_RETRY_DELAY_SECONDS` — задержка между попытками (например, `5` секунд)
 
 ### KTalk Bearer API
 - `KTALK_HOST`
@@ -216,6 +216,7 @@ python autoalerter.py \
 - решения ветвления (`Decision: ...`);
 - resolver summary (`requested/resolved/not_found/without_mention`);
 - anti-flap решение (активен график или нет, возраст последнего close, reuse thread/jira);
+- retry по KTalk (ошибка попытки, ожидание перед retry, успешная повторная попытка, итоговая ошибка после всех попыток);
 - итоги KTalk:
   - `KTalk mention summary | mentioned_count=...`
   - `KTalk invite summary | invited_count=...`
@@ -225,6 +226,7 @@ python autoalerter.py \
 - **Jira ошибки**: проверить `JIRA_TOKEN`, URL и SSL настройки.
 - **Resolver ошибки**: проверить `RECIPIENT_RESOLVER_URL`, формат ответа JSON.
 - **KTalk invite ошибки**: проверить `KTALK_BEARER_TOKEN`, `KTALK_HOST`, `KTALK_TALK_HOST`, room id.
+- **KTalk retry**: если видите `retry in 5 seconds`, первая попытка не удалась, но процесс автоматически делает следующую попытку с задержкой из `KTALK_RETRY_DELAY_SECONDS`.
 - **DB ошибки**: проверить доступ к PostgreSQL и наличие `close_event_at`.
 
 ---

@@ -100,6 +100,20 @@ ORDER BY close_event_at DESC
 LIMIT 1;
 """
 
+SQL_MARK_LAST_CLOSED_INCIDENT_TIMESTAMP = """
+UPDATE trmetrics.availconf.conf
+SET close_event_at = CURRENT_TIMESTAMP
+WHERE id = (
+    SELECT id
+    FROM trmetrics.availconf.conf
+    WHERE insight_id = %(insight_id)s
+      AND event_balance = 0
+    ORDER BY id DESC
+    LIMIT 1
+)
+RETURNING id;
+"""
+
 
 @dataclass(slots=True)
 class ClosedIncidentReopenCandidate:
@@ -198,6 +212,13 @@ def get_last_closed_incident_for_reopen(insight_id: str) -> ClosedIncidentReopen
         thread_root_event_id=str(thread_root_event_id).strip(),
         jira_issue_key=str(jira_issue_key).strip(),
     )
+
+
+def mark_last_closed_incident_timestamp(insight_id: str) -> bool:
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(SQL_MARK_LAST_CLOSED_INCIDENT_TIMESTAMP, {"insight_id": insight_id})
+        row = cur.fetchone()
+    return row is not None
 
 
 def get_last_thread_id(insight_id: str) -> str | None:

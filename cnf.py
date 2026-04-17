@@ -12,8 +12,8 @@ KTALK_BASE_URL = "https://chat.ktalk.ru"
 KTALK_BOT_USER = "zabbix_bot"
 KTALK_JWT_TOKEN = "<ktalk_bot_jwt_token>"
 KTALK_ROOM_ID = "!SWMeGogRrRLJIxnikt:matrix-9.ktalk.ru"
-KTALK_SEND_RETRIES = 3
-KTALK_SEND_RETRY_DELAY_SEC = 1.5
+KTALK_REQUEST_RETRIES = 3
+KTALK_RETRY_DELAY_SECONDS = 5
 
 # KTalk Bearer API
 KTALK_HOST = "chat.ktalk.ru"
