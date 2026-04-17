@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Kontur Talk messaging helpers for autoalerter."""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any
+
+import requests
+
+import cnf
+
+logger = logging.getLogger("autoalerter")
+
+
+def _event_message(event: str, text: str) -> str:
+    if event == "1":
+        return f"🔴🤖{text}"
+    return f"🟢🤖{text}"
+
+
+def _bot_api_url(endpoint: str) -> str:
+    base = str(cnf.KTALK_BASE_URL).rstrip("/")
+    endpoint = endpoint.lstrip("/")
+    return f"{base}/_matrix/client/strangler/api/v1/bot/{cnf.KTALK_JWT_TOKEN}/{endpoint}"
+
+
+def _safe_bot_endpoint(endpoint: str) -> str:
+    base = str(cnf.KTALK_BASE_URL).rstrip("/")
+    endpoint = endpoint.lstrip("/")
+    return f"{base}/_matrix/client/strangler/api/v1/bot/***/{endpoint}"
+
+
+def _bot_request(method: str, endpoint: str, **kwargs: Any) -> requests.Response:
+    url = _bot_api_url(endpoint)
+    retries = max(int(getattr(cnf, "KTALK_REQUEST_RETRIES", 3)), 1)
+    retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.request(
+                method,
+                url,
+                verify=cnf.VERIFY_SSL,
+                timeout=cnf.REQUEST_TIMEOUT,
+                **kwargs,
+            )
+        except requests.RequestException as error:
+            if attempt < retries:
+                logger.warning(
+                    "KTalk request failed on attempt %s/%s, retry in %s seconds: %s",
+                    attempt,
+                    retries,
+                    retry_delay_seconds,
+                    error,
+                )
+                time.sleep(retry_delay_seconds)
+                continue
+            logger.error("KTalk request failed after all retries: %s", error)
+            raise
+
+        if response.status_code >= 500 and attempt < retries:
+            logger.warning(
+                "KTalk request failed on attempt %s/%s with status=%s, retry in %s seconds",
+                attempt,
+                retries,
+                response.status_code,
+                retry_delay_seconds,
+            )
+            time.sleep(retry_delay_seconds)
+            continue
+
+        if attempt > 1:
+            logger.info("KTalk request succeeded on attempt %s/%s", attempt, retries)
+        return response
+
+    raise RuntimeError("KTalk request retry loop ended unexpectedly")
+
+
+def send_to_ktalk_message(
+    text: str,
+    trigger_time: str,
+    room_id: str,
+    event: str,
+    thread_id: str | None = None,
+    mentions: list[str] | None = None,
+    message_format: str = "plain",
+    decorate_event: bool = True,
+) -> str | None:
+    if message_format not in {"plain", "html", "markdown"}:
+        raise ValueError(f"Unsupported ktalk message format: {message_format}")
+
+    message_text = _event_message(event, text) if decorate_event else text
+    final_text = f"{trigger_time} {message_text}".strip()
+
+    if len(final_text) > 4096:
+        logger.error("KTalk message exceeds 4096 chars len=%s", len(final_text))
+        return None
+
+    payload = {
+        "room_id": room_id,
+        "thread_id": thread_id,
+        "format": message_format,
+        "message": final_text,
+        "mentions": mentions or [],
+    }
+
+    logger.debug(
+        "Kontur Talk Bot API connection details: base_url=%s room_id=%s bot_user=%s endpoint=%s",
+        cnf.KTALK_BASE_URL,
+        room_id,
+        cnf.KTALK_BOT_USER,
+        _safe_bot_endpoint("send_message"),
+    )
+
+    try:
+        response = _bot_request("POST", "send_message", json=payload)
+    except requests.RequestException:
+        return None
+
+    if not response.ok:
+        status = response.status_code
+        logger.error("Kontur Talk send failed status=%s", status)
+        return None
+
+    try:
+        event_id = str(response.json().get("event_id", "")).strip()
+    except ValueError:
+        event_id = ""
+
+    if not event_id:
+        logger.error("Kontur Talk send response has no event_id")
+        return None
+
+    logger.debug("Kontur Talk send response status=%s event_id=%s", response.status_code, event_id)
+    return event_id
+
+
+def create_discussion(
+    full_name: str,
+    trigger_name: str,
+    reply: str,
+    jira_key: str,
+    trigger_time: str,
+) -> str:
+    room_id = cnf.KTALK_ROOM_ID
+    jira_issue_url = cnf.JIRA_ISSUE_BROWSE_URL.format(jira_key)
+
+    first_message = f"Авария. {full_name}. {trigger_name}. {reply}. {jira_key}"
+    logger.debug(
+        "Using bot=%s fixed Kontur Talk room id=%s for full_name=%r trigger_name=%r",
+        cnf.KTALK_BOT_USER,
+        room_id,
+        full_name,
+        trigger_name,
+    )
+
+    thread_root_event_id = send_to_ktalk_message(
+        first_message,
+        "",
+        room_id,
+        event="1",
+        thread_id=None,
+    )
+    if not thread_root_event_id:
+        raise RuntimeError("Failed to send first incident message to Kontur Talk")
+
+    thread_message = (
+        f"{trigger_time}\n"
+        "event=1\n"
+        f"{trigger_name}\n"
+        f"{reply}\n"
+        f"{jira_issue_url}"
+    )
+    thread_reply_event_id = send_to_ktalk_message(
+        thread_message,
+        "",
+        room_id,
+        event="1",
+        thread_id=thread_root_event_id,
+    )
+    if not thread_reply_event_id:
+        logger.warning("Failed to send first thread reply for event=1 thread_id=%s", thread_root_event_id)
+
+    return thread_root_event_id
+
+
+def mention_users_in_thread(
+    recipients: list[dict[str, str]],
+    room_id: str,
+    thread_root_event_id: str,
+) -> int:
+    mentioned = 0
+
+    for recipient in recipients:
+        full_name = str(recipient.get("ad_name", "")).strip()
+        mention_id = str(recipient.get("ktalk_mention_id", "")).strip()
+        ad_login = str(recipient.get("ad_login", "")).strip()
+
+        if not mention_id:
+            logger.warning("Skip mention: empty mention_id for login=%s", ad_login)
+            continue
+
+        mention_text = f"{full_name} {mention_id}".strip()
+
+        event_id = send_to_ktalk_message(
+            mention_text,
+            "",
+            room_id,
+            event="1",
+            thread_id=thread_root_event_id,
+            mentions=[mention_id],
+            message_format="plain",
+            decorate_event=False,
+        )
+        if event_id:
+            mentioned += 1
+        else:
+            logger.warning(
+                "KTalk mention failed room_id=%s thread_id=%s login=%s",
+                room_id,
+                thread_root_event_id,
+                ad_login,
+            )
+
+    return mentioned
+
+
+def mark_discussion_resolved(thread_root_event_id: str) -> None:
+    logger.debug("No room rename operation for Kontur Talk thread_root_event_id=%s", thread_root_event_id)
