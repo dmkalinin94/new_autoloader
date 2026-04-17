@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from urllib.parse import quote
 
 import requests
@@ -13,6 +14,14 @@ import requests
 import cnf
 
 logger = logging.getLogger("autoalerter")
+
+
+@dataclass(slots=True)
+class InviteMissingUsersResult:
+    invited_count: int
+    would_invite_count: int
+    dry_run_enabled: bool
+    dry_run_users: list[dict[str, str]]
 
 
 def _build_bearer_header() -> str:
@@ -105,15 +114,45 @@ def invite_user_to_room(room_id: str, user_id: str) -> bool:
     return True
 
 
-def invite_missing_users_to_room(recipients: list[dict[str, str]], room_id: str) -> int:
+def build_dry_run_invite_message(dry_run_users: list[dict[str, str]]) -> str:
+    if not dry_run_users:
+        return "Dry-run режим инвайтов включен. Пользователей для приглашения нет."
+
+    lines = ["Dry-run режим инвайтов включен. Были бы приглашены:"]
+    for user in dry_run_users:
+        ad_name = str(user.get("ad_name", "")).strip()
+        mention_id = str(user.get("ktalk_mention_id", "")).strip()
+        ad_login = str(user.get("ad_login", "")).strip()
+        display_name = ad_name or ad_login or mention_id
+        lines.append(f"- {display_name} {mention_id}".strip())
+    return "\n".join(lines)
+
+
+def invite_missing_users_to_room(
+    recipients: list[dict[str, str]],
+    room_id: str,
+    dry_run_enabled: bool = False,
+) -> InviteMissingUsersResult:
     invited = 0
+    dry_run_users: list[dict[str, str]] = []
 
     for recipient in recipients:
         mention_id = str(recipient.get("ktalk_mention_id", "")).strip()
         ad_login = str(recipient.get("ad_login", "")).strip()
+        ad_name = str(recipient.get("ad_name", "")).strip()
 
         if not mention_id:
             logger.warning("Skip invite: empty mention_id for login=%s", ad_login)
+            continue
+
+        if dry_run_enabled:
+            dry_run_users.append(
+                {
+                    "ad_login": ad_login,
+                    "ad_name": ad_name,
+                    "ktalk_mention_id": mention_id,
+                }
+            )
             continue
 
         if invite_user_to_room(room_id, mention_id):
@@ -121,4 +160,10 @@ def invite_missing_users_to_room(recipients: list[dict[str, str]], room_id: str)
         else:
             logger.warning("KTalk invite failed room_id=%s login=%s", room_id, ad_login)
 
-    return invited
+    would_invite_count = len(dry_run_users) if dry_run_enabled else invited
+    return InviteMissingUsersResult(
+        invited_count=invited,
+        would_invite_count=would_invite_count,
+        dry_run_enabled=dry_run_enabled,
+        dry_run_users=dry_run_users,
+    )

@@ -28,6 +28,19 @@ REQUEST_TIMEOUT = 30
 VERIFY_SSL = False
 LOG_FILE = "/tmp/autoalerter.log"
 
+# Invite behavior
+KTALK_INVITES_DRY_RUN = False
+
+# Flap-reopen behavior
+FLAP_REOPEN_WINDOW_ENABLED = True
+FLAP_REOPEN_APPLY_NIGHT_WINDOW = True
+FLAP_REOPEN_TIME_START_HOUR = 21
+FLAP_REOPEN_TIME_END_HOUR = 9
+# Python datetime.weekday(): 5=Saturday, 6=Sunday
+FLAP_REOPEN_WEEKDAYS = (5, 6)
+FLAP_REOPEN_HOURS = 3
+TIMEZONE_NAME = "Europe/Moscow"
+
 # Mandatory recipients
 MANDATORY_RECIPIENTS = (
     "dm.kalinin",

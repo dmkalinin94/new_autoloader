@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg2
@@ -37,7 +38,8 @@ LIMIT 1;
 
 SQL_CLOSE_INCIDENTS = """
 UPDATE trmetrics.availconf.conf
-SET event_balance = 0
+SET event_balance = 0,
+    close_event_at = CURRENT_TIMESTAMP
 WHERE insight_id = %(insight_id)s
   AND event_balance > 0;
 """
@@ -83,6 +85,28 @@ WHERE insight_id = %(insight_id)s
   AND event_balance > 0
 RETURNING event_balance;
 """
+
+
+SQL_GET_LAST_CLOSED_INCIDENT_FOR_REOPEN = """
+SELECT
+    close_event_at,
+    r_discussion_id,
+    jira_issue_key
+FROM trmetrics.availconf.conf
+WHERE insight_id = %(insight_id)s
+  AND event_balance = 0
+  AND close_event_at IS NOT NULL
+ORDER BY close_event_at DESC
+LIMIT 1;
+"""
+
+
+@dataclass(slots=True)
+class ClosedIncidentReopenCandidate:
+    close_event_at: Any
+    thread_root_event_id: str
+    jira_issue_key: str
+
 
 def get_db_connection() -> PgConnection:
     logger.debug("Opening PostgreSQL connection: host=%s db=%s", DB_HOST, DB_NAME)
@@ -155,6 +179,25 @@ def create_internal_incident(
     }
     with get_db_connection() as conn, conn.cursor() as cur:
         cur.execute(SQL_CREATE_INCIDENT, values)
+
+
+def get_last_closed_incident_for_reopen(insight_id: str) -> ClosedIncidentReopenCandidate | None:
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(SQL_GET_LAST_CLOSED_INCIDENT_FOR_REOPEN, {"insight_id": insight_id})
+        row = cur.fetchone()
+
+    if not row:
+        return None
+
+    close_event_at, thread_root_event_id, jira_issue_key = row
+    if not close_event_at or not thread_root_event_id or not jira_issue_key:
+        return None
+
+    return ClosedIncidentReopenCandidate(
+        close_event_at=close_event_at,
+        thread_root_event_id=str(thread_root_event_id).strip(),
+        jira_issue_key=str(jira_issue_key).strip(),
+    )
 
 
 def get_last_thread_id(insight_id: str) -> str | None:

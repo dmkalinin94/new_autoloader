@@ -10,8 +10,9 @@ import logging
 import re
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import requests
 import urllib3
@@ -21,12 +22,13 @@ from db import (
     close_open_incidents,
     create_internal_incident,
     get_active_incident_count,
+    get_last_closed_incident_for_reopen,
     get_last_jira_issue_key,
     get_last_thread_root_event_id,
     update_event_counter,
 )
-from jira_client import create_jira_incident, get_jira_data, validate_jira_incident_status
-from ktalk_invites import get_room_members, invite_missing_users_to_room
+from jira_client import JiraServiceData, create_jira_incident, get_jira_data, validate_jira_incident_status
+from ktalk_invites import build_dry_run_invite_message, get_room_members, invite_missing_users_to_room
 from ktalk_messenger import create_discussion, mark_discussion_resolved, mention_users_in_thread, send_to_ktalk_message
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -270,6 +272,84 @@ def split_recipients_by_room_membership(
     return in_room_recipients, out_of_room_recipients
 
 
+def get_current_local_datetime() -> datetime:
+    return datetime.now(ZoneInfo(cnf.TIMEZONE_NAME))
+
+
+def is_night_window_active(current_local_datetime: datetime) -> bool:
+    start_hour = int(cnf.FLAP_REOPEN_TIME_START_HOUR)
+    end_hour = int(cnf.FLAP_REOPEN_TIME_END_HOUR)
+    current_hour = current_local_datetime.hour
+
+    if start_hour == end_hour:
+        return True
+
+    if start_hour < end_hour:
+        return start_hour <= current_hour < end_hour
+
+    return current_hour >= start_hour or current_hour < end_hour
+
+
+def is_flap_reopen_schedule_active(current_local_datetime: datetime) -> bool:
+    if not cnf.FLAP_REOPEN_WINDOW_ENABLED:
+        logger.info("Flap reopen disabled by configuration")
+        return False
+
+    weekday_value = current_local_datetime.weekday()  # 0=Monday ... 6=Sunday
+    is_weekday_in_config = weekday_value in set(cnf.FLAP_REOPEN_WEEKDAYS)
+    is_night_period = bool(cnf.FLAP_REOPEN_APPLY_NIGHT_WINDOW and is_night_window_active(current_local_datetime))
+
+    if is_weekday_in_config or is_night_period:
+        logger.info(
+            "Flap reopen schedule active | weekday=%s is_weekday_in_config=%s is_night_period=%s",
+            weekday_value,
+            is_weekday_in_config,
+            is_night_period,
+        )
+        return True
+
+    logger.info("Current time is outside configured flap-reopen schedule")
+    return False
+
+
+def _convert_datetime_to_local_timezone(value: datetime) -> datetime:
+    local_timezone = ZoneInfo(cnf.TIMEZONE_NAME)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=local_timezone)
+    return value.astimezone(local_timezone)
+
+
+def get_reopen_candidate_from_recent_close(insight_id: str, current_local_datetime: datetime) -> tuple[str, str] | None:
+    if not is_flap_reopen_schedule_active(current_local_datetime):
+        return None
+
+    closed_incident_candidate = get_last_closed_incident_for_reopen(insight_id)
+    if not closed_incident_candidate:
+        logger.info("No recently closed incident found for reopen")
+        return None
+
+    close_event_at_local = _convert_datetime_to_local_timezone(closed_incident_candidate.close_event_at)
+    close_age = current_local_datetime - close_event_at_local
+    close_age_minutes = int(close_age.total_seconds() / 60)
+    logger.info(
+        "Recent closed incident found | closed_at=%s age_minutes=%s",
+        close_event_at_local.isoformat(),
+        close_age_minutes,
+    )
+
+    reopen_window = timedelta(hours=int(cnf.FLAP_REOPEN_HOURS))
+    if close_age < timedelta(0) or close_age > reopen_window:
+        logger.info("Recent close is older than reopen window, creating new incident")
+        return None
+
+    logger.info(
+        "Reusing existing thread_root_event_id=%s jira_issue_key=%s",
+        closed_incident_candidate.thread_root_event_id,
+        closed_incident_candidate.jira_issue_key,
+    )
+    return closed_incident_candidate.thread_root_event_id, closed_incident_candidate.jira_issue_key
+
+
 def _send_message_to_existing_thread(payload: EventPayload, thread_root_event_id: str) -> None:
     send_to_ktalk_message(
         payload.message,
@@ -284,7 +364,7 @@ def _process_existing_open_incident(payload: EventPayload) -> bool:
     logger.info("Step: decide active incident existence")
     active_incident_count = get_active_incident_count(payload.insight_id)
     if active_incident_count == 0:
-        logger.info("Decision: active incident not found; creating new incident flow")
+        logger.info("Decision: active incident not found; create/reopen flow")
         return False
 
     updated_event_balance = update_event_counter(payload.insight_id, delta=1)
@@ -300,18 +380,123 @@ def _process_existing_open_incident(payload: EventPayload) -> bool:
     return True
 
 
-def _create_new_incident_flow(payload: EventPayload) -> None:
-    logger.info("Step: create new incident flow started")
+def _persist_reopened_incident(
+    payload: EventPayload,
+    jira_service_data: JiraServiceData,
+    short_name: str,
+    requested_logins: list[str],
+    thread_root_event_id: str,
+    jira_issue_key: str,
+) -> None:
+    create_internal_incident(
+        insight_id=payload.insight_id,
+        short_name=short_name,
+        full_name=jira_service_data.full_name,
+        trigger_name=payload.trigger_name,
+        recipients=requested_logins,
+        trigger_start_time=format_trigger_time_for_database(payload.trigger_time),
+        thread_root_event_id=thread_root_event_id,
+        jira_issue_key=jira_issue_key,
+    )
 
-    short_name = extract_short_name_from_groups(payload.groups)
-    trigger_time_for_database = format_trigger_time_for_database(payload.trigger_time)
 
-    logger.info("Step: load service metadata from Jira")
-    jira_service_data = get_jira_data(payload.insight_id)
-    if not jira_service_data.is_actual:
-        logger.info("Decision: service is not actual; skip incident creation")
+def _try_reopen_recent_closed_incident(
+    payload: EventPayload,
+    jira_service_data: JiraServiceData,
+    short_name: str,
+    requested_logins: list[str],
+) -> bool:
+    current_local_datetime = get_current_local_datetime()
+    reopen_candidate = get_reopen_candidate_from_recent_close(payload.insight_id, current_local_datetime)
+    if not reopen_candidate:
+        return False
+
+    reopen_thread_root_event_id, reopen_jira_issue_key = reopen_candidate
+
+    logger.info("Step: anti-flap reopen path activated")
+    _persist_reopened_incident(
+        payload=payload,
+        jira_service_data=jira_service_data,
+        short_name=short_name,
+        requested_logins=requested_logins,
+        thread_root_event_id=reopen_thread_root_event_id,
+        jira_issue_key=reopen_jira_issue_key,
+    )
+    _send_message_to_existing_thread(payload, reopen_thread_root_event_id)
+    return True
+
+
+def _notify_recipients_in_ktalk(requested_logins: list[str], thread_root_event_id: str) -> None:
+    resolved_recipients = resolve_recipients_via_api(requested_logins)
+    if not resolved_recipients:
+        logger.info("Step: resolver returned no recipients; skip mention/invite")
+        logger.info("KTalk mention summary | mentioned_count=0")
+        if cnf.KTALK_INVITES_DRY_RUN:
+            logger.info("KTalk invite dry-run summary | would_invite_count=0 actual_invited_count=0")
+        else:
+            logger.info("KTalk invite summary | invited_count=0")
         return
 
+    logger.info("Step: load room members")
+    room_members = get_room_members(cnf.KTALK_ROOM_ID)
+    logger.info("Step: room members loaded | count=%s", len(room_members))
+
+    in_room_recipients, out_of_room_recipients = split_recipients_by_room_membership(
+        resolved_recipients,
+        room_members,
+    )
+
+    mentioned_count = 0
+    if in_room_recipients:
+        logger.info("Step: mention in-room users")
+        mentioned_count = mention_users_in_thread(in_room_recipients, cnf.KTALK_ROOM_ID, thread_root_event_id)
+    logger.info("KTalk mention summary | mentioned_count=%s", mentioned_count)
+
+    if not out_of_room_recipients:
+        if cnf.KTALK_INVITES_DRY_RUN:
+            logger.info("KTalk invite dry-run summary | would_invite_count=0 actual_invited_count=0")
+        else:
+            logger.info("KTalk invite summary | invited_count=0")
+        logger.info("KTalk notify summary | mentioned_count=%s invited_count=0", mentioned_count)
+        return
+
+    invite_result = invite_missing_users_to_room(
+        out_of_room_recipients,
+        cnf.KTALK_ROOM_ID,
+        dry_run_enabled=bool(cnf.KTALK_INVITES_DRY_RUN),
+    )
+
+    if invite_result.dry_run_enabled:
+        dry_run_message = build_dry_run_invite_message(invite_result.dry_run_users)
+        send_to_ktalk_message(
+            dry_run_message,
+            "",
+            cnf.KTALK_ROOM_ID,
+            event="1",
+            thread_id=None,
+            message_format="plain",
+        )
+        logger.info(
+            "KTalk invite dry-run summary | would_invite_count=%s actual_invited_count=0 users=%s",
+            invite_result.would_invite_count,
+            [item.get("ad_login", "") for item in invite_result.dry_run_users],
+        )
+        logger.info(
+            "KTalk notify summary | mentioned_count=%s invited_count=0 would_invite_count=%s",
+            mentioned_count,
+            invite_result.would_invite_count,
+        )
+        return
+
+    logger.info("KTalk invite summary | invited_count=%s", invite_result.invited_count)
+    logger.info(
+        "KTalk notify summary | mentioned_count=%s invited_count=%s",
+        mentioned_count,
+        invite_result.invited_count,
+    )
+
+
+def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServiceData, short_name: str, requested_logins: list[str]) -> None:
     logger.info("Step: create Jira incident")
     jira_create_response = create_jira_incident(
         payload.insight_id,
@@ -332,33 +517,7 @@ def _create_new_incident_flow(payload: EventPayload) -> None:
         payload.trigger_time,
     )
 
-    requested_logins = merge_requested_logins_with_mandatory(jira_service_data.recipients)
-    resolved_recipients = resolve_recipients_via_api(requested_logins)
-
-    logger.info("Step: load room members")
-    room_members = get_room_members(cnf.KTALK_ROOM_ID)
-    logger.info("Step: room members loaded | count=%s", len(room_members))
-
-    in_room_recipients, out_of_room_recipients = split_recipients_by_room_membership(
-        resolved_recipients,
-        room_members,
-    )
-
-    logger.info("Step: mention in-room users")
-    mentioned_count = mention_users_in_thread(in_room_recipients, cnf.KTALK_ROOM_ID, thread_root_event_id)
-
-    logger.info("Step: invite out-of-room users")
-    invited_count = invite_missing_users_to_room(out_of_room_recipients, cnf.KTALK_ROOM_ID)
-
-    logger.info(
-        "Step: ktalk notify summary | requested=%s resolved=%s in_room=%s out_of_room=%s mentions=%s invites=%s",
-        len(requested_logins),
-        len(resolved_recipients),
-        len(in_room_recipients),
-        len(out_of_room_recipients),
-        mentioned_count,
-        invited_count,
-    )
+    _notify_recipients_in_ktalk(requested_logins, thread_root_event_id)
 
     logger.info("Step: persist incident state in database")
     create_internal_incident(
@@ -367,7 +526,7 @@ def _create_new_incident_flow(payload: EventPayload) -> None:
         full_name=jira_service_data.full_name,
         trigger_name=payload.trigger_name,
         recipients=requested_logins,
-        trigger_start_time=trigger_time_for_database,
+        trigger_start_time=format_trigger_time_for_database(payload.trigger_time),
         thread_root_event_id=thread_root_event_id,
         jira_issue_key=jira_issue_key,
     )
@@ -376,10 +535,22 @@ def _create_new_incident_flow(payload: EventPayload) -> None:
 def process_open_event(payload: EventPayload) -> None:
     logger.info("Step: process event=1 (open)")
 
+    logger.info("Step: load service metadata from Jira")
+    jira_service_data = get_jira_data(payload.insight_id)
+    if not jira_service_data.is_actual:
+        logger.info("Decision: service is not actual; skip open-event")
+        return
+
     if _process_existing_open_incident(payload):
         return
 
-    _create_new_incident_flow(payload)
+    short_name = extract_short_name_from_groups(payload.groups)
+    requested_logins = merge_requested_logins_with_mandatory(jira_service_data.recipients)
+
+    if _try_reopen_recent_closed_incident(payload, jira_service_data, short_name, requested_logins):
+        return
+
+    _create_new_incident_flow(payload, jira_service_data, short_name, requested_logins)
 
 
 def process_close_event(payload: EventPayload) -> None:
