@@ -25,6 +25,14 @@ class InviteMissingUsersResult:
     dry_run_users: list[dict[str, str]]
 
 
+@dataclass(slots=True)
+class RoomMembersResult:
+    members: set[str]
+    ok: bool
+    status_code: int | None = None
+    error: str | None = None
+
+
 def _build_bearer_header() -> str:
     token = str(cnf.KTALK_BEARER_TOKEN).strip()
     if not token:
@@ -88,7 +96,7 @@ def _request_with_retry(method: str, url: str, **kwargs: object) -> requests.Res
     return None
 
 
-def get_room_members(room_id: str) -> set[str]:
+def get_room_members(room_id: str) -> RoomMembersResult:
     logger.debug("Loading room members room_id=%s", room_id)
 
     base = str(cnf.KTALK_BASE_URL).rstrip("/")
@@ -102,22 +110,56 @@ def get_room_members(room_id: str) -> set[str]:
     )
     if response is None:
         logger.error("KTalk members request failed after all retries room_id=%s", room_id)
-        return set()
+        return RoomMembersResult(
+            members=set(),
+            ok=False,
+            status_code=None,
+            error="request_failed_after_retries",
+        )
     response.encoding = "utf-8"
+
+    if response.status_code == 403:
+        logger.error("KTalk members request forbidden status=%s room_id=%s", response.status_code, room_id)
+        return RoomMembersResult(
+            members=set(),
+            ok=False,
+            status_code=response.status_code,
+            error="forbidden",
+        )
 
     if not response.ok:
         logger.error("KTalk members request failed status=%s room_id=%s", response.status_code, room_id)
-        return set()
+        return RoomMembersResult(
+            members=set(),
+            ok=False,
+            status_code=response.status_code,
+            error="http_error",
+        )
 
     try:
         payload = response.json()
     except json.JSONDecodeError:
         logger.error("Failed to parse room members JSON room_id=%s", room_id)
-        return set()
+        return RoomMembersResult(
+            members=set(),
+            ok=False,
+            status_code=response.status_code,
+            error="invalid_json",
+        )
+
+    chunk = payload.get("chunk", [])
+    if not isinstance(chunk, list):
+        logger.error("Unexpected room members payload format room_id=%s", room_id)
+        return RoomMembersResult(
+            members=set(),
+            ok=False,
+            status_code=response.status_code,
+            error="invalid_payload",
+        )
 
     members: set[str] = set()
 
-    for item in payload.get("chunk", []):
+    for item in chunk:
         if not isinstance(item, dict):
             continue
         content = item.get("content", {})
@@ -129,7 +171,12 @@ def get_room_members(room_id: str) -> set[str]:
             members.add(user_id)
 
     logger.debug("Room members loaded count=%s room_id=%s", len(members), room_id)
-    return members
+    return RoomMembersResult(
+        members=members,
+        ok=True,
+        status_code=response.status_code,
+        error=None,
+    )
 
 
 def invite_user_to_room(room_id: str, user_id: str) -> bool:
