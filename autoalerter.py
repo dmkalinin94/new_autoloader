@@ -273,6 +273,45 @@ def split_recipients_by_room_membership(
     return in_room_recipients, out_of_room_recipients
 
 
+def _recipient_to_payload(recipient: ResolvedRecipient) -> dict[str, str]:
+    return {
+        "ad_login": recipient.ad_login,
+        "ktalk_mention_id": recipient.ktalk_mention_id,
+        "ad_name": recipient.ad_name,
+    }
+
+
+def _mention_all_resolved_recipients_fallback(
+    resolved_recipients: list[ResolvedRecipient],
+    thread_root_event_id: str,
+    reason: str,
+    status_code: int | None,
+) -> None:
+    fallback_recipients = [_recipient_to_payload(recipient) for recipient in resolved_recipients]
+
+    logger.warning(
+        "KTalk room members unavailable; mention-only fallback enabled | reason=%s status=%s recipients=%s",
+        reason,
+        status_code,
+        len(fallback_recipients),
+    )
+
+    mentioned_count = 0
+    if fallback_recipients:
+        mentioned_count = mention_users_in_thread(
+            fallback_recipients,
+            cnf.KTALK_ROOM_ID,
+            thread_root_event_id,
+        )
+
+    logger.info(
+        "KTalk notify fallback summary | reason=%s status=%s mentioned_count=%s invited_count=0",
+        reason,
+        status_code,
+        mentioned_count,
+    )
+
+
 def get_current_local_datetime() -> datetime:
     return datetime.now(ZoneInfo(cnf.TIMEZONE_NAME))
 
@@ -439,7 +478,17 @@ def _notify_recipients_in_ktalk(requested_logins: list[str], thread_root_event_i
         return
 
     logger.info("Step: load room members")
-    room_members = get_room_members(cnf.KTALK_ROOM_ID)
+    room_members_result = get_room_members(cnf.KTALK_ROOM_ID)
+    if not room_members_result.ok:
+        _mention_all_resolved_recipients_fallback(
+            resolved_recipients=resolved_recipients,
+            thread_root_event_id=thread_root_event_id,
+            reason=room_members_result.error or "unknown_room_members_error",
+            status_code=room_members_result.status_code,
+        )
+        return
+
+    room_members = room_members_result.members
     logger.info("Step: room members loaded | count=%s", len(room_members))
 
     in_room_recipients, out_of_room_recipients = split_recipients_by_room_membership(
