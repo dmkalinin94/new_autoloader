@@ -273,6 +273,61 @@ def split_recipients_by_room_membership(
     return in_room_recipients, out_of_room_recipients
 
 
+def _recipient_to_payload(recipient: ResolvedRecipient) -> dict[str, str]:
+    return {
+        "ad_login": recipient.ad_login,
+        "ktalk_mention_id": recipient.ktalk_mention_id,
+        "ad_name": recipient.ad_name,
+    }
+
+
+def _mention_all_resolved_recipients_fallback(
+    resolved_recipients: list[ResolvedRecipient],
+    thread_root_event_id: str,
+    reason: str,
+    status_code: int | None,
+) -> None:
+    fallback_recipients = [_recipient_to_payload(recipient) for recipient in resolved_recipients]
+
+    logger.warning(
+        "KTalk room members unavailable; mention-only fallback enabled | reason=%s status=%s recipients=%s",
+        reason,
+        status_code,
+        len(fallback_recipients),
+    )
+
+    service_warning_message = (
+        "⚠️ СЛУЖЕБНОЕ ПРЕДУПРЕЖДЕНИЕ\n\n"
+        "Не удалось получить список участников комнаты KTalk.\n"
+        "Инвайты пропущены.\n"
+        "Ответственные будут упомянуты напрямую в этом треде."
+    )
+    send_to_ktalk_message(
+        service_warning_message,
+        "",
+        cnf.KTALK_ROOM_ID,
+        event="1",
+        thread_id=thread_root_event_id,
+        message_format="plain",
+        decorate_event=False,
+    )
+
+    mentioned_count = 0
+    if fallback_recipients:
+        mentioned_count = mention_users_in_thread(
+            fallback_recipients,
+            cnf.KTALK_ROOM_ID,
+            thread_root_event_id,
+        )
+
+    logger.info(
+        "KTalk notify fallback summary | reason=%s status=%s mentioned_count=%s invited_count=0",
+        reason,
+        status_code,
+        mentioned_count,
+    )
+
+
 def get_current_local_datetime() -> datetime:
     return datetime.now(ZoneInfo(cnf.TIMEZONE_NAME))
 
@@ -423,7 +478,21 @@ def _try_reopen_recent_closed_incident(
         thread_root_event_id=reopen_thread_root_event_id,
         jira_issue_key=reopen_jira_issue_key,
     )
-    _send_message_to_existing_thread(payload, reopen_thread_root_event_id)
+    reopen_message = (
+        "🔁 ПОВТОРНОЕ СРАБАТЫВАНИЕ\n\n"
+        "Событие повторно открылось в пределах окна антифлапа.\n"
+        "Новый инцидент и новый тред не создавались.\n"
+        "Сообщение добавлено в существующее обсуждение."
+    )
+    send_to_ktalk_message(
+        reopen_message,
+        "",
+        cnf.KTALK_ROOM_ID,
+        event="1",
+        thread_id=reopen_thread_root_event_id,
+        message_format="plain",
+        decorate_event=False,
+    )
     return True
 
 
@@ -439,7 +508,17 @@ def _notify_recipients_in_ktalk(requested_logins: list[str], thread_root_event_i
         return
 
     logger.info("Step: load room members")
-    room_members = get_room_members(cnf.KTALK_ROOM_ID)
+    room_members_result = get_room_members(cnf.KTALK_ROOM_ID)
+    if not room_members_result.ok:
+        _mention_all_resolved_recipients_fallback(
+            resolved_recipients=resolved_recipients,
+            thread_root_event_id=thread_root_event_id,
+            reason=room_members_result.error or "unknown_room_members_error",
+            status_code=room_members_result.status_code,
+        )
+        return
+
+    room_members = room_members_result.members
     logger.info("Step: room members loaded | count=%s", len(room_members))
 
     in_room_recipients, out_of_room_recipients = split_recipients_by_room_membership(
@@ -474,8 +553,9 @@ def _notify_recipients_in_ktalk(requested_logins: list[str], thread_root_event_i
             "",
             cnf.KTALK_ROOM_ID,
             event="1",
-            thread_id=None,
+            thread_id=thread_root_event_id,
             message_format="plain",
+            decorate_event=False,
         )
         logger.info(
             "KTalk invite dry-run summary | would_invite_count=%s actual_invited_count=0 users=%s",
@@ -593,7 +673,10 @@ def process_close_event(payload: EventPayload) -> None:
     if thread_root_event_id:
         mark_discussion_resolved(thread_root_event_id)
         send_to_ktalk_message(
-            "Активные алерты, на которые был создан инцидент, отсутствуют",
+            (
+                "Активные события по данному инциденту отсутствуют.\n"
+                "Инцидент переведен в состояние завершения/ожидания закрытия."
+            ),
             format_trigger_time_for_database(payload.trigger_time),
             cnf.KTALK_ROOM_ID,
             payload.event,

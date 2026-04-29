@@ -17,8 +17,8 @@ logger = logging.getLogger("autoalerter")
 
 def _event_message(event: str, text: str) -> str:
     if event == "1":
-        return f"🔴🤖{text}"
-    return f"🟢🤖{text}"
+        return f"🔴 АВАРИЯ\n\n{text}"
+    return f"🟢 ВОССТАНОВЛЕНО\n\n{text}"
 
 
 def _bot_api_url(endpoint: str) -> str:
@@ -148,7 +148,11 @@ def create_discussion(
     room_id = cnf.KTALK_ROOM_ID
     jira_issue_url = cnf.JIRA_ISSUE_BROWSE_URL.format(jira_key)
 
-    first_message = f"Авария. {full_name}. {trigger_name}. {reply}. {jira_key}"
+    first_message = (
+        f"Сервис: {full_name}\n"
+        f"Триггер: {trigger_name}\n"
+        f"Инцидент: {jira_key}"
+    )
     logger.debug(
         "Using bot=%s fixed Kontur Talk room id=%s for full_name=%r trigger_name=%r",
         cnf.KTALK_BOT_USER,
@@ -168,11 +172,11 @@ def create_discussion(
         raise RuntimeError("Failed to send first incident message to Kontur Talk")
 
     thread_message = (
-        f"{trigger_time}\n"
-        "event=1\n"
-        f"{trigger_name}\n"
-        f"{reply}\n"
-        f"{jira_issue_url}"
+        f"Сервис: {full_name}\n"
+        f"Триггер: {trigger_name}\n"
+        f"Время события: {trigger_time}\n"
+        f"Инцидент Jira: {jira_issue_url}\n\n"
+        f"Сообщение мониторинга:\n{reply}"
     )
     thread_reply_event_id = send_to_ktalk_message(
         thread_message,
@@ -203,7 +207,7 @@ def mention_users_in_thread(
             logger.warning("Skip mention: empty mention_id for login=%s", ad_login)
             continue
 
-        mention_text = f"{full_name} {mention_id}".strip()
+        mention_text = f"Ответственный: {full_name} {mention_id}".strip()
 
         event_id = send_to_ktalk_message(
             mention_text,
