@@ -213,9 +213,18 @@ def invite_user_to_room(room_id: str, user_id: str) -> bool:
 
 def build_dry_run_invite_message(dry_run_users: list[dict[str, str]]) -> str:
     if not dry_run_users:
-        return "Dry-run режим инвайтов включен. Пользователей для приглашения нет."
+        return (
+            "🧪 DRY-RUN\n\n"
+            "Инвайты не отправлены.\n"
+            "Пользователей для приглашения нет."
+        )
 
-    lines = ["Dry-run режим инвайтов включен. Были бы приглашены:"]
+    lines = [
+        "🧪 DRY-RUN",
+        "",
+        "Инвайты не отправлены.",
+        "Бот проверил, что следующих пользователей нужно было бы пригласить в комнату:",
+    ]
     for user in dry_run_users:
         ad_name = str(user.get("ad_name", "")).strip()
         mention_id = str(user.get("ktalk_mention_id", "")).strip()
