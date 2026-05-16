@@ -28,9 +28,21 @@ from db import (
     mark_last_closed_incident_timestamp,
     update_event_counter,
 )
-from jira_client import JiraServiceData, create_jira_incident, get_jira_data, validate_jira_incident_status
+from jira_client import (
+    JiraServiceData,
+    create_jira_incident,
+    get_jira_data,
+    transition_jira_incident_with_thread_link,
+    validate_jira_incident_status,
+)
 from ktalk_invites import build_dry_run_invite_message, get_room_members, invite_missing_users_to_room
-from ktalk_messenger import create_discussion, mark_discussion_resolved, mention_users_in_thread, send_to_ktalk_message
+from ktalk_messenger import (
+    build_ktalk_thread_link,
+    create_discussion,
+    mark_discussion_resolved,
+    mention_users_in_thread,
+    send_to_ktalk_message,
+)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings(
@@ -588,6 +600,8 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
         jira_incident_type_key=jira_service_data.jira_incident_type_key,
     )
     jira_issue_key = str(jira_create_response.get("key", "")).strip()
+    if not jira_issue_key:
+        raise RuntimeError("Jira create response has no issue key")
 
     logger.info("Step: create KTalk discussion (root + first reply)")
     thread_root_event_id = create_discussion(
@@ -597,6 +611,21 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
         jira_issue_key,
         payload.trigger_time,
     )
+
+    if bool(getattr(cnf, "JIRA_THREAD_LINK_TRANSITION_ENABLED", False)):
+        logger.info("Step: build KTalk thread link for Jira")
+        thread_link = build_ktalk_thread_link(cnf.KTALK_ROOM_ID, thread_root_event_id)
+
+        logger.info("Step: update Jira incident with KTalk thread link")
+        transition_result = transition_jira_incident_with_thread_link(jira_issue_key, thread_link)
+        if not transition_result.ok:
+            logger.warning(
+                "Jira thread link transition was not completed | issue=%s status=%s",
+                jira_issue_key,
+                transition_result.status_code,
+            )
+    else:
+        logger.info("Step: Jira thread link transition skipped by configuration")
 
     _notify_recipients_in_ktalk(requested_logins, thread_root_event_id)
 

@@ -7,12 +7,49 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
 import cnf
 
 logger = logging.getLogger("autoalerter")
+
+
+def build_ktalk_thread_link(room_id: str, thread_root_event_id: str) -> str:
+    """Build KTalk web link for Jira custom field validation."""
+    raw_room_id = str(room_id).strip()
+    raw_thread_root_event_id = str(thread_root_event_id).strip()
+
+    if not raw_room_id:
+        raise ValueError("Cannot build KTalk thread link: room_id is empty")
+    if not raw_thread_root_event_id:
+        raise ValueError("Cannot build KTalk thread link: thread_root_event_id is empty")
+
+    encoded_room_id = quote(raw_room_id, safe="")
+    encoded_thread_root_event_id = quote(raw_thread_root_event_id, safe="")
+
+    template = str(cnf.KTALK_THREAD_WEB_URL_TEMPLATE).strip()
+    if not template:
+        raise ValueError("KTALK_THREAD_WEB_URL_TEMPLATE is empty")
+
+    thread_link = template.format(
+        room_id=encoded_room_id,
+        room_id_raw=raw_room_id,
+        thread_root_event_id=encoded_thread_root_event_id,
+        thread_root_event_id_raw=raw_thread_root_event_id,
+        thread_id=encoded_thread_root_event_id,
+        thread_id_raw=raw_thread_root_event_id,
+    )
+
+    required_prefix = str(getattr(cnf, "KTALK_THREAD_LINK_REQUIRED_PREFIX", "")).strip()
+    if required_prefix and required_prefix not in thread_link:
+        raise ValueError(
+            "KTalk thread link does not contain required Jira validation prefix: "
+            f"{required_prefix}"
+        )
+
+    return thread_link
 
 
 def _event_message(event: str, text: str) -> str:

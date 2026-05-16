@@ -42,6 +42,13 @@
    - если anti-flap не сработал:
      - создать Jira-инцидент;
      - создать обсуждение в KTalk (root + первое сообщение в треде);
+     - если `JIRA_THREAD_LINK_TRANSITION_ENABLED = True`:
+       - сформировать web-ссылку на KTalk-тред;
+       - выполнить Jira transition `541` для созданного issue;
+       - заполнить поле `customfield_41400` ссылкой на KTalk-тред;
+       - успешный ответ Jira: `204 No Content`;
+       - при ошибке валидации Jira вернет `400` с ошибкой `customfield_41400`;
+     - если `JIRA_THREAD_LINK_TRANSITION_ENABLED = False`, пропустить построение ссылки и Jira transition;
      - резолвить получателей через resolver API;
      - разделить на `in_room` / `out_of_room`;
      - упомянуть `in_room`;
@@ -125,6 +132,13 @@ Dry-run режим инвайтов включен. Пользователей �
 - `JIRA_CREATE_INC_URL`
 - `JIRA_ISSUE_STATUS_URL`
 - `JIRA_ISSUE_BROWSE_URL`
+- `JIRA_THREAD_LINK_TRANSITION_ENABLED` — включает Jira transition после создания KTalk-треда
+- `JIRA_THREAD_LINK_TRANSITION_URL` — URL POST transition с `{issueKey}`
+- `JIRA_THREAD_LINK_TRANSITION_ID` — id transition, по умолчанию `541`
+- `JIRA_THREAD_LINK_CUSTOM_FIELD` — поле ссылки на тред, по умолчанию `customfield_41400`
+- `JIRA_THREAD_LINK_TRANSITION_STRICT` — режим обработки ошибки Jira transition:
+  - `False` — ошибка transition логируется, основной flow продолжается до mentions/invites и записи в БД;
+  - `True` — HTTP-ошибка transition пробрасывается исключением и останавливает flow.
 
 ### KTalk Bot API
 - `KTALK_BASE_URL`
@@ -133,6 +147,8 @@ Dry-run режим инвайтов включен. Пользователей �
 - `KTALK_ROOM_ID`
 - `KTALK_REQUEST_RETRIES` — сколько попыток делать для KTalk HTTP-вызовов
 - `KTALK_RETRY_DELAY_SECONDS` — задержка между попытками (например, `5` секунд)
+- `KTALK_THREAD_LINK_REQUIRED_PREFIX` — обязательный prefix ссылки для Jira-валидации
+- `KTALK_THREAD_WEB_URL_TEMPLATE` — шаблон web-ссылки на KTalk-тред
 
 ### KTalk Bearer API
 - `KTALK_HOST`

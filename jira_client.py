@@ -25,6 +25,13 @@ class JiraServiceData:
     recipients: list[str]
 
 
+@dataclass(slots=True)
+class JiraThreadLinkTransitionResult:
+    ok: bool
+    status_code: int
+    response_text: str
+
+
 def _decode_actual_state(value: str) -> bool:
     is_actual = value == "Актуально"
     logger.debug("Decoded actual state raw=%r parsed=%s", value, is_actual)
@@ -188,6 +195,89 @@ def create_jira_incident(
     result = response.json()
     logger.debug("Jira incident created response keys=%s", list(result.keys()))
     return result
+
+
+def transition_jira_incident_with_thread_link(
+    jira_issue_key: str,
+    thread_link: str,
+) -> JiraThreadLinkTransitionResult:
+    """Move Jira issue by configured transition and fill KTalk thread link field."""
+    issue_key = str(jira_issue_key).strip()
+    link = str(thread_link).strip()
+
+    if not issue_key:
+        raise ValueError("Cannot transition Jira issue: jira_issue_key is empty")
+    if not link:
+        raise ValueError("Cannot transition Jira issue: thread_link is empty")
+
+    required_prefix = str(getattr(cnf, "KTALK_THREAD_LINK_REQUIRED_PREFIX", "")).strip()
+    if required_prefix and required_prefix not in link:
+        raise ValueError(
+            "Cannot transition Jira issue: thread_link does not contain required prefix "
+            f"{required_prefix}"
+        )
+
+    transition_id = str(cnf.JIRA_THREAD_LINK_TRANSITION_ID).strip()
+    custom_field_name = str(cnf.JIRA_THREAD_LINK_CUSTOM_FIELD).strip()
+    transition_url = str(cnf.JIRA_THREAD_LINK_TRANSITION_URL).format(issue_key)
+
+    payload = {
+        "transition": {
+            "id": transition_id,
+        },
+        "fields": {
+            custom_field_name: link,
+        },
+    }
+
+    logger.info(
+        "Step: Jira transition with KTalk thread link started | issue=%s transition_id=%s field=%s",
+        issue_key,
+        transition_id,
+        custom_field_name,
+    )
+
+    response = requests.post(
+        transition_url,
+        json=payload,
+        verify=cnf.VERIFY_SSL,
+        headers={
+            "Authorization": cnf.JIRA_TOKEN,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        timeout=cnf.REQUEST_TIMEOUT,
+    )
+
+    response_text = response.text or ""
+
+    if response.status_code == 204:
+        logger.info(
+            "Jira transition with KTalk thread link completed | issue=%s status=%s",
+            issue_key,
+            response.status_code,
+        )
+        return JiraThreadLinkTransitionResult(
+            ok=True,
+            status_code=response.status_code,
+            response_text=response_text,
+        )
+
+    logger.error(
+        "Jira transition with KTalk thread link failed | issue=%s status=%s body=%s",
+        issue_key,
+        response.status_code,
+        response_text[:2000],
+    )
+
+    if bool(getattr(cnf, "JIRA_THREAD_LINK_TRANSITION_STRICT", False)):
+        response.raise_for_status()
+
+    return JiraThreadLinkTransitionResult(
+        ok=False,
+        status_code=response.status_code,
+        response_text=response_text,
+    )
 
 
 def validate_jira_incident_status(jira_issue_key: str) -> bool:
