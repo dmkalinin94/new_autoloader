@@ -7,6 +7,15 @@ JIRA_CREATE_INC_URL = "https://hd-dev02.samoletgroup.ru/rest/api/2/issue"
 JIRA_ISSUE_STATUS_URL = "https://hd-dev02.samoletgroup.ru/rest/api/2/issue/{}?fields=status"
 JIRA_ISSUE_BROWSE_URL = "https://hd-dev02.samoletgroup.ru/browse/{}"
 
+# Jira transition after KTalk thread creation
+JIRA_THREAD_LINK_TRANSITION_ENABLED = False
+JIRA_THREAD_LINK_TRANSITION_URL = "https://hd-dev.samoletgroup.ru/rest/api/2/issue/{}/transitions"
+JIRA_THREAD_LINK_TRANSITION_ID = "541"
+JIRA_THREAD_LINK_CUSTOM_FIELD = "customfield_41400"
+# False: log Jira transition errors and continue the new-incident flow.
+# True: raise Jira HTTP errors and stop the flow after a failed transition.
+JIRA_THREAD_LINK_TRANSITION_STRICT = False
+
 # KTalk Bot API
 KTALK_BASE_URL = "https://chat.ktalk.ru"
 KTALK_BOT_USER = "zabbix_bot"
@@ -14,6 +23,12 @@ KTALK_JWT_TOKEN = "<ktalk_bot_jwt_token>"
 KTALK_ROOM_ID = "!SWMeGogRrRLJIxnikt:matrix-9.ktalk.ru"
 KTALK_REQUEST_RETRIES = 3
 KTALK_RETRY_DELAY_SECONDS = 5
+
+# KTalk web thread link
+KTALK_THREAD_LINK_REQUIRED_PREFIX = "https://samoletgroup.ktalk.ru/app/messenger/"
+KTALK_THREAD_WEB_URL_TEMPLATE = (
+    "https://samoletgroup.ktalk.ru/app/messenger/{room_id}?thread_id={thread_root_event_id}"
+)
 
 # KTalk Bearer API
 KTALK_HOST = "chat.ktalk.ru"
