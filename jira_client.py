@@ -164,6 +164,8 @@ def create_jira_incident(
     jira_incident_type_key: str | None,
 ) -> dict[str, Any]:
     logger.debug("Preparing Jira incident payload for insight_id=%s", insight_id)
+    issue_data.setdefault("fields", {})
+    issue_data["fields"]["priority"] = "Авария"
     issue_data["fields"]["summary"] = f"Автоматический инцидент Zabbix: {short_name} {trigger_name}"
     issue_data["fields"]["description"] = trigger_name
     issue_data["fields"]["customfield_19700"] = [{"key": insight_id}]
