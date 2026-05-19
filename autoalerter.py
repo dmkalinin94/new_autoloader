@@ -143,6 +143,7 @@ def default_issue_template() -> dict[str, dict[str, object]]:
             "issuetype": {"id": "10120"},
             "summary": "",
             "description": "",
+            "priority": "Авария",
             "customfield_27602": [{"key": "TZ-24771"}],
             "customfield_35901": [{"key": "TZ-30904"}],
             "customfield_19700": [],
