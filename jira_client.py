@@ -155,6 +155,20 @@ def get_jira_data(insight_id: str) -> JiraServiceData:
     )
 
 
+def _post_jira_incident_payload(issue_data: dict[str, Any]) -> requests.Response:
+    return requests.post(
+        cnf.JIRA_CREATE_INC_URL,
+        json=issue_data,
+        verify=cnf.VERIFY_SSL,
+        headers={
+            "Authorization": cnf.JIRA_TOKEN,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        timeout=cnf.REQUEST_TIMEOUT,
+    )
+
+
 def create_jira_incident(
     insight_id: str,
     short_name: str,
@@ -164,6 +178,8 @@ def create_jira_incident(
     jira_incident_type_key: str | None,
 ) -> dict[str, Any]:
     logger.debug("Preparing Jira incident payload for insight_id=%s", insight_id)
+    issue_data.setdefault("fields", {})
+    issue_data["fields"]["priority"] = "Авария"
     issue_data["fields"]["summary"] = f"Автоматический инцидент Zabbix: {short_name} {trigger_name}"
     issue_data["fields"]["description"] = trigger_name
     issue_data["fields"]["customfield_19700"] = [{"key": insight_id}]
@@ -177,20 +193,28 @@ def create_jira_incident(
         issue_data["fields"]["customfield_23400"] = []
 
     logger.debug("Creating Jira incident via POST %s", cnf.JIRA_CREATE_INC_URL)
-    response = requests.post(
-        cnf.JIRA_CREATE_INC_URL,
-        json=issue_data,
-        verify=cnf.VERIFY_SSL,
-        headers={
-            "Authorization": cnf.JIRA_TOKEN,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        timeout=cnf.REQUEST_TIMEOUT,
-    )
+    response = _post_jira_incident_payload(issue_data)
     logger.debug("Jira create response status=%s", response.status_code)
+
     if response.status_code >= 400:
-        logger.error("Jira create failed status=%s", response.status_code)
+        response_text = response.text or ""
+        logger.error("Jira create failed status=%s body=%s", response.status_code, response_text[:2000])
+
+        fields_payload = issue_data.get("fields", {})
+        priority_payload = fields_payload.get("priority") if isinstance(fields_payload, dict) else None
+        if response.status_code == 400 and priority_payload == "Авария":
+            logger.info("Retrying Jira create with priority as object payload | value=Авария")
+            issue_data["fields"]["priority"] = {"name": "Авария"}
+            response = _post_jira_incident_payload(issue_data)
+            logger.debug("Jira create retry response status=%s", response.status_code)
+            if response.status_code >= 400:
+                retry_text = response.text or ""
+                logger.error(
+                    "Jira create retry failed status=%s body=%s",
+                    response.status_code,
+                    retry_text[:2000],
+                )
+
     response.raise_for_status()
     result = response.json()
     logger.debug("Jira incident created response keys=%s", list(result.keys()))
