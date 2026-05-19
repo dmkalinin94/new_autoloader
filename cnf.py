@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Jira
-JIRA_TOKEN = "Bearer <token>"
+JIRA_TOKEN = "Basic <token>"
 JIRA_SERVICE_URL = "https://hd.samoletgroup.ru/rest/assets/1.0/object/{}/attributes"
 JIRA_CREATE_INC_URL = "https://hd-dev02.samoletgroup.ru/rest/api/2/issue"
 JIRA_ISSUE_STATUS_URL = "https://hd-dev02.samoletgroup.ru/rest/api/2/issue/{}?fields=status"
@@ -9,9 +9,9 @@ JIRA_ISSUE_BROWSE_URL = "https://hd-dev02.samoletgroup.ru/browse/{}"
 
 # Jira transition after KTalk thread creation
 JIRA_THREAD_LINK_TRANSITION_ENABLED = False
-JIRA_THREAD_LINK_TRANSITION_URL = "https://hd-dev.samoletgroup.ru/rest/api/2/issue/{}/transitions"
+JIRA_THREAD_LINK_TRANSITION_URL = "https://hd.samoletgroup.ru/rest/api/2/issue/{}/transitions"
 JIRA_THREAD_LINK_TRANSITION_ID = "541"
-JIRA_THREAD_LINK_CUSTOM_FIELD = "customfield_41400"
+JIRA_THREAD_LINK_CUSTOM_FIELD = "customfield_41700"
 # False: log Jira transition errors and continue the new-incident flow.
 # True: raise Jira HTTP errors and stop the flow after a failed transition.
 JIRA_THREAD_LINK_TRANSITION_STRICT = False
