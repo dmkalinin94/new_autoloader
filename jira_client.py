@@ -199,6 +199,7 @@ def create_jira_incident(
     logger.debug("Creating Jira incident via POST %s", cnf.JIRA_CREATE_INC_URL)
     response = _post_jira_incident_payload(issue_data)
     logger.debug("Jira create response status=%s", response.status_code)
+
     if response.status_code >= 400:
         response_text = response.text or ""
         logger.error("Jira create failed status=%s body=%s", response.status_code, response_text[:2000])
