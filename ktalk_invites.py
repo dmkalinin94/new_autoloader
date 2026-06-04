@@ -66,7 +66,11 @@ def _request_with_retry(method: str, url: str, **kwargs: object) -> requests.Res
                 method,
                 url,
                 verify=cnf.VERIFY_SSL,
-                timeout=cnf.REQUEST_TIMEOUT,
+                timeout=getattr(
+                    cnf,
+                    "KTALK_SAFE_REQUEST_TIMEOUT",
+                    cnf.REQUEST_TIMEOUT,
+                ),
                 **kwargs,
             )
         except requests.RequestException as error:

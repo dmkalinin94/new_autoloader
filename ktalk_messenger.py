@@ -99,6 +99,10 @@ def _ktalk_json_headers(include_authorization: bool = False) -> dict[str, str]:
     return headers
 
 
+def _ktalk_timeout(setting_name: str, default_timeout: object) -> object:
+    return getattr(cnf, setting_name, default_timeout)
+
+
 def _bot_request(
     method: str,
     endpoint: str,
@@ -118,6 +122,12 @@ def _bot_request(
         1,
     )
     retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
+    timeout_setting_name = (
+        "KTALK_SAFE_REQUEST_TIMEOUT"
+        if retry_on_5xx or retry_on_network_error
+        else "KTALK_SEND_MESSAGE_TIMEOUT"
+    )
+    request_timeout = _ktalk_timeout(timeout_setting_name, getattr(cnf, "REQUEST_TIMEOUT", 30))
 
     for attempt in range(1, retries + 1):
         try:
@@ -125,7 +135,7 @@ def _bot_request(
                 method,
                 url,
                 verify=cnf.VERIFY_SSL,
-                timeout=cnf.REQUEST_TIMEOUT,
+                timeout=request_timeout,
                 **kwargs,
             )
         except requests.RequestException as error:
@@ -355,7 +365,10 @@ def mention_users_in_thread(
                 headers=_ktalk_json_headers(include_authorization=True),
                 json=payload,
                 verify=cnf.VERIFY_SSL,
-                timeout=cnf.REQUEST_TIMEOUT,
+                timeout=_ktalk_timeout(
+                    "KTALK_SEND_MESSAGE_TIMEOUT",
+                    getattr(cnf, "REQUEST_TIMEOUT", 30),
+                ),
             )
         except requests.RequestException as error:
             logger.error(

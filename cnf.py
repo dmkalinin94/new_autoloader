@@ -26,6 +26,9 @@ KTALK_SAFE_REQUEST_RETRIES = 3
 # Backward-compatible default for older code/imports. Prefer the request-specific settings above.
 KTALK_REQUEST_RETRIES = KTALK_SAFE_REQUEST_RETRIES
 KTALK_RETRY_DELAY_SECONDS = 5
+# KTalk send_message is not retried automatically, so give KTalk more time to confirm the send.
+KTALK_SEND_MESSAGE_TIMEOUT = (10, 60)
+KTALK_SAFE_REQUEST_TIMEOUT = 30
 
 # KTalk web thread link
 KTALK_THREAD_LINK_REQUIRED_PREFIX = "https://samoletgroup.ktalk.ru/app/messenger/"
