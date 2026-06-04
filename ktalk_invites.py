@@ -45,7 +45,9 @@ def _build_bearer_header() -> str:
 def _common_headers() -> dict[str, str]:
     return {
         "authorization": _build_bearer_header(),
+        "content-type": "application/json",
         "host": str(cnf.KTALK_HOST).strip(),
+        "origin": str(cnf.KTALK_TALK_HOST).strip(),
         "talk-host": str(cnf.KTALK_TALK_HOST).strip(),
         "accept": "application/json",
     }

@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import time
+from html import escape
 from typing import Any
+from uuid import uuid4
 from urllib.parse import quote
 
 import requests
@@ -68,6 +70,33 @@ def _safe_bot_endpoint(endpoint: str) -> str:
     base = str(cnf.KTALK_BASE_URL).rstrip("/")
     endpoint = endpoint.lstrip("/")
     return f"{base}/_matrix/client/strangler/api/v1/bot/***/{endpoint}"
+
+
+def _bearer_token() -> str:
+    token = str(cnf.KTALK_BEARER_TOKEN).strip()
+    if token.lower().startswith("bearer "):
+        return token
+    return f"Bearer {token}"
+
+
+def _matrix_send_message_url(room_id: str) -> str:
+    base = str(cnf.KTALK_BASE_URL).rstrip("/")
+    room_path = quote(room_id, safe="")
+    transaction_id = f"autoalerter-{int(time.time() * 1000)}-{uuid4().hex}"
+    return f"{base}/_matrix/client/r0/rooms/{room_path}/send/m.room.message/{transaction_id}"
+
+
+def _ktalk_json_headers(include_authorization: bool = False) -> dict[str, str]:
+    headers = {
+        "content-type": "application/json",
+        "host": str(cnf.KTALK_HOST).strip(),
+        "origin": str(cnf.KTALK_TALK_HOST).strip(),
+        "accept": "application/json",
+    }
+    if include_authorization:
+        headers["authorization"] = _bearer_token()
+        headers["talk-host"] = str(cnf.KTALK_TALK_HOST).strip()
+    return headers
 
 
 def _bot_request(
@@ -184,6 +213,7 @@ def send_to_ktalk_message(
             "send_message",
             retry_on_5xx=False,
             retry_on_network_error=False,
+            headers=_ktalk_json_headers(),
             json=payload,
         )
     except requests.RequestException:
@@ -300,26 +330,64 @@ def mention_users_in_thread(
             logger.warning("Skip mention: empty mention_id for login=%s", ad_login)
             continue
 
-        mention_text = f"Ответственный: {full_name} {mention_id}".strip()
-
-        event_id = send_to_ktalk_message(
-            mention_text,
-            "",
-            room_id,
-            event="1",
-            thread_id=thread_root_event_id,
-            mentions=[mention_id],
-            message_format="plain",
-            decorate_event=False,
+        mention_name = full_name or ad_login or mention_id
+        mention_body = f"{mention_name} "
+        mention_url = (
+            f"{cnf.KTALK_TALK_HOST.rstrip('/')}/app/messenger/#/user/"
+            f"{quote(mention_id, safe='@:$')}"
         )
-        if event_id:
+        payload: dict[str, Any] = {
+            "msgtype": "m.text",
+            "body": mention_body,
+            "format": "org.matrix.custom.html",
+            "formatted_body": f'<a href="{escape(mention_url, quote=True)}">{escape(mention_name)}</a>',
+            "m.mentions": {"user_ids": [mention_id]},
+            "m.relates_to": {
+                "rel_type": "m.thread",
+                "event_id": thread_root_event_id,
+            },
+        }
+
+        try:
+            response = requests.request(
+                "PUT",
+                _matrix_send_message_url(room_id),
+                headers=_ktalk_json_headers(include_authorization=True),
+                json=payload,
+                verify=cnf.VERIFY_SSL,
+                timeout=cnf.REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as error:
+            logger.error(
+                "KTalk mention returned ambiguous result; automatic retry disabled to avoid duplicate message "
+                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s error=%s",
+                room_id,
+                thread_root_event_id,
+                mention_id,
+                error,
+            )
+            continue
+
+        if response.ok:
             mentioned += 1
+            continue
+
+        if response.status_code >= 500:
+            logger.error(
+                "KTalk mention returned ambiguous result; automatic retry disabled to avoid duplicate message "
+                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s status_code=%s",
+                room_id,
+                thread_root_event_id,
+                mention_id,
+                response.status_code,
+            )
         else:
             logger.warning(
-                "KTalk mention failed room_id=%s thread_id=%s login=%s",
+                "KTalk mention failed room_id=%s thread_id=%s login=%s status=%s",
                 room_id,
                 thread_root_event_id,
                 ad_login,
+                response.status_code,
             )
 
     return mentioned
