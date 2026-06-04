@@ -635,7 +635,12 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
     else:
         logger.warning("KTalk recipient notification skipped because thread_root_event_id is missing")
 
-    logger.info("Step: persist incident state in database")
+    logger.info(
+        "Step: persist incident state in database | insight_id=%s jira_key=%s thread_root_event_id=%s",
+        payload.insight_id,
+        jira_issue_key,
+        thread_root_event_id,
+    )
     create_internal_incident(
         insight_id=payload.insight_id,
         short_name=short_name,
@@ -645,6 +650,12 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
         trigger_start_time=format_trigger_time_for_database(payload.trigger_time),
         thread_root_event_id=thread_root_event_id,
         jira_issue_key=jira_issue_key,
+    )
+    logger.info(
+        "Incident state persisted in database | insight_id=%s jira_key=%s thread_root_event_id=%s",
+        payload.insight_id,
+        jira_issue_key,
+        thread_root_event_id,
     )
 
 

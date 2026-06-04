@@ -53,47 +53,100 @@ def _common_headers() -> dict[str, str]:
     }
 
 
+def _format_timeout_for_log(timeout_value: object) -> str:
+    if isinstance(timeout_value, tuple) and len(timeout_value) == 2:
+        return f"connect={timeout_value[0]}s read={timeout_value[1]}s"
+    return f"total={timeout_value}s"
+
+
+def _response_text_preview(response: requests.Response, limit: int = 300) -> str:
+    text = response.text.replace("\n", " ").strip()
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
+
+
 def _request_with_retry(method: str, url: str, **kwargs: object) -> requests.Response | None:
     retries = max(
         int(getattr(cnf, "KTALK_SAFE_REQUEST_RETRIES", getattr(cnf, "KTALK_REQUEST_RETRIES", 3))),
         1,
     )
     retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
+    request_timeout = getattr(
+        cnf,
+        "KTALK_SAFE_REQUEST_TIMEOUT",
+        cnf.REQUEST_TIMEOUT,
+    )
+    timeout_for_log = _format_timeout_for_log(request_timeout)
 
     for attempt in range(1, retries + 1):
+        started_at = time.monotonic()
+        logger.info(
+            "KTalk safe request attempt started | method=%s url=%s attempt=%s/%s timeout=%s",
+            method,
+            url,
+            attempt,
+            retries,
+            timeout_for_log,
+        )
         try:
             response = requests.request(
                 method,
                 url,
                 verify=cnf.VERIFY_SSL,
-                timeout=getattr(
-                    cnf,
-                    "KTALK_SAFE_REQUEST_TIMEOUT",
-                    cnf.REQUEST_TIMEOUT,
-                ),
+                timeout=request_timeout,
                 **kwargs,
             )
         except requests.RequestException as error:
+            elapsed_seconds = time.monotonic() - started_at
             if attempt < retries:
                 logger.warning(
-                    "KTalk request failed on attempt %s/%s, retry in %s seconds: %s",
+                    "KTalk safe request attempt failed | method=%s url=%s attempt=%s/%s elapsed=%.3fs timeout=%s "
+                    "retry_in=%ss error=%s",
+                    method,
+                    url,
                     attempt,
                     retries,
+                    elapsed_seconds,
+                    timeout_for_log,
                     retry_delay_seconds,
                     error,
                 )
                 time.sleep(retry_delay_seconds)
                 continue
-            logger.error("KTalk request failed after all retries: %s", error)
+            logger.error(
+                "KTalk safe request failed after all retries | method=%s url=%s attempts=%s elapsed=%.3fs timeout=%s error=%s",
+                method,
+                url,
+                retries,
+                elapsed_seconds,
+                timeout_for_log,
+                error,
+            )
             return None
+
+        elapsed_seconds = time.monotonic() - started_at
+        logger.info(
+            "KTalk safe request attempt finished | method=%s url=%s attempt=%s/%s elapsed=%.3fs timeout=%s status=%s",
+            method,
+            url,
+            attempt,
+            retries,
+            elapsed_seconds,
+            timeout_for_log,
+            response.status_code,
+        )
 
         if response.status_code >= 500 and attempt < retries:
             logger.warning(
-                "KTalk request failed on attempt %s/%s with status=%s, retry in %s seconds",
+                "KTalk safe request returned server error | method=%s url=%s attempt=%s/%s status=%s retry_in=%ss response_preview=%r",
+                method,
+                url,
                 attempt,
                 retries,
                 response.status_code,
                 retry_delay_seconds,
+                _response_text_preview(response),
             )
             time.sleep(retry_delay_seconds)
             continue
