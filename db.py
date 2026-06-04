@@ -178,7 +178,7 @@ def create_internal_incident(
     trigger_name: str,
     recipients: list[str],
     trigger_start_time: str,
-    thread_root_event_id: str,
+    thread_root_event_id: str | None,
     jira_issue_key: str,
 ) -> None:
     values: dict[str, Any] = {
@@ -188,7 +188,7 @@ def create_internal_incident(
         "trigger_name": trigger_name,
         "recipients": recipients,
         "trigger_time": trigger_start_time,
-        "rdiscussionid": thread_root_event_id,
+        "rdiscussionid": thread_root_event_id or "",
         "jira_issue_key": jira_issue_key,
     }
     with get_db_connection() as conn, conn.cursor() as cur:

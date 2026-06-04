@@ -231,7 +231,7 @@ def create_discussion(
     reply: str,
     jira_key: str,
     trigger_time: str,
-) -> str:
+) -> str | None:
     room_id = cnf.KTALK_ROOM_ID
     jira_issue_url = cnf.JIRA_ISSUE_BROWSE_URL.format(jira_key)
 
@@ -256,7 +256,13 @@ def create_discussion(
         thread_id=None,
     )
     if not thread_root_event_id:
-        raise RuntimeError("Failed to send first incident message to Kontur Talk")
+        logger.error(
+            "KTalk discussion root was not confirmed; continue incident flow without thread id "
+            "room_id=%s jira_key=%s",
+            room_id,
+            jira_key,
+        )
+        return None
 
     thread_message = (
         f"Сервис: {full_name}\n"
