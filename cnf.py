@@ -21,8 +21,14 @@ KTALK_BASE_URL = "https://chat.ktalk.ru"
 KTALK_BOT_USER = "zabbix_bot"
 KTALK_JWT_TOKEN = "<ktalk_bot_jwt_token>"
 KTALK_ROOM_ID = "!SWMeGogRrRLJIxnikt:matrix-9.ktalk.ru"
-KTALK_REQUEST_RETRIES = 3
+KTALK_SEND_MESSAGE_RETRIES = 1
+KTALK_SAFE_REQUEST_RETRIES = 3
+# Backward-compatible default for older code/imports. Prefer the request-specific settings above.
+KTALK_REQUEST_RETRIES = KTALK_SAFE_REQUEST_RETRIES
 KTALK_RETRY_DELAY_SECONDS = 5
+# KTalk send_message is not retried automatically, so give KTalk more time to confirm the send.
+KTALK_SEND_MESSAGE_TIMEOUT = (10, 60)
+KTALK_SAFE_REQUEST_TIMEOUT = 30
 
 # KTalk web thread link
 KTALK_THREAD_LINK_REQUIRED_PREFIX = "https://samoletgroup.ktalk.ru/app/messenger/"

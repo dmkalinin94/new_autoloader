@@ -613,7 +613,7 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
         payload.trigger_time,
     )
 
-    if bool(getattr(cnf, "JIRA_THREAD_LINK_TRANSITION_ENABLED", False)):
+    if thread_root_event_id and bool(getattr(cnf, "JIRA_THREAD_LINK_TRANSITION_ENABLED", False)):
         logger.info("Step: build KTalk thread link for Jira")
         thread_link = build_ktalk_thread_link(cnf.KTALK_ROOM_ID, thread_root_event_id)
 
@@ -625,12 +625,22 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
                 jira_issue_key,
                 transition_result.status_code,
             )
-    else:
+    elif thread_root_event_id:
         logger.info("Step: Jira thread link transition skipped by configuration")
+    else:
+        logger.warning("KTalk thread link transition skipped because thread_root_event_id is missing")
 
-    _notify_recipients_in_ktalk(requested_logins, thread_root_event_id)
+    if thread_root_event_id:
+        _notify_recipients_in_ktalk(requested_logins, thread_root_event_id)
+    else:
+        logger.warning("KTalk recipient notification skipped because thread_root_event_id is missing")
 
-    logger.info("Step: persist incident state in database")
+    logger.info(
+        "Step: persist incident state in database | insight_id=%s jira_key=%s thread_root_event_id=%s",
+        payload.insight_id,
+        jira_issue_key,
+        thread_root_event_id,
+    )
     create_internal_incident(
         insight_id=payload.insight_id,
         short_name=short_name,
@@ -640,6 +650,12 @@ def _create_new_incident_flow(payload: EventPayload, jira_service_data: JiraServ
         trigger_start_time=format_trigger_time_for_database(payload.trigger_time),
         thread_root_event_id=thread_root_event_id,
         jira_issue_key=jira_issue_key,
+    )
+    logger.info(
+        "Incident state persisted in database | insight_id=%s jira_key=%s thread_root_event_id=%s",
+        payload.insight_id,
+        jira_issue_key,
+        thread_root_event_id,
     )
 
 
