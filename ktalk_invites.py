@@ -45,14 +45,19 @@ def _build_bearer_header() -> str:
 def _common_headers() -> dict[str, str]:
     return {
         "authorization": _build_bearer_header(),
+        "content-type": "application/json",
         "host": str(cnf.KTALK_HOST).strip(),
+        "origin": str(cnf.KTALK_TALK_HOST).strip(),
         "talk-host": str(cnf.KTALK_TALK_HOST).strip(),
         "accept": "application/json",
     }
 
 
 def _request_with_retry(method: str, url: str, **kwargs: object) -> requests.Response | None:
-    retries = max(int(getattr(cnf, "KTALK_REQUEST_RETRIES", 3)), 1)
+    retries = max(
+        int(getattr(cnf, "KTALK_SAFE_REQUEST_RETRIES", getattr(cnf, "KTALK_REQUEST_RETRIES", 3))),
+        1,
+    )
     retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
 
     for attempt in range(1, retries + 1):
