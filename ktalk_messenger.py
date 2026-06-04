@@ -79,10 +79,13 @@ def _bearer_token() -> str:
     return f"Bearer {token}"
 
 
-def _matrix_send_message_url(room_id: str) -> str:
+def _new_matrix_transaction_id() -> str:
+    return f"autoalerter-{int(time.time() * 1000)}-{uuid4().hex}"
+
+
+def _matrix_send_message_url(room_id: str, transaction_id: str) -> str:
     base = str(cnf.KTALK_BASE_URL).rstrip("/")
     room_path = quote(room_id, safe="")
-    transaction_id = f"autoalerter-{int(time.time() * 1000)}-{uuid4().hex}"
     return f"{base}/_matrix/client/r0/rooms/{room_path}/send/m.room.message/{transaction_id}"
 
 
@@ -358,10 +361,12 @@ def mention_users_in_thread(
             },
         }
 
+        transaction_id = _new_matrix_transaction_id()
+
         try:
             response = requests.request(
                 "PUT",
-                _matrix_send_message_url(room_id),
+                _matrix_send_message_url(room_id, transaction_id),
                 headers=_ktalk_json_headers(include_authorization=True),
                 json=payload,
                 verify=cnf.VERIFY_SSL,
@@ -373,10 +378,11 @@ def mention_users_in_thread(
         except requests.RequestException as error:
             logger.error(
                 "KTalk mention returned ambiguous result; automatic retry disabled to avoid duplicate message "
-                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s error=%s",
+                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s transaction_id=%s error=%s",
                 room_id,
                 thread_root_event_id,
                 mention_id,
+                transaction_id,
                 error,
             )
             continue
@@ -388,10 +394,11 @@ def mention_users_in_thread(
         if response.status_code >= 500:
             logger.error(
                 "KTalk mention returned ambiguous result; automatic retry disabled to avoid duplicate message "
-                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s status_code=%s",
+                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s transaction_id=%s status_code=%s",
                 room_id,
                 thread_root_event_id,
                 mention_id,
+                transaction_id,
                 response.status_code,
             )
         else:
