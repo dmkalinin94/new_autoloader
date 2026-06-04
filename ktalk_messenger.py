@@ -176,6 +176,7 @@ def _bot_request(
     raise RuntimeError("KTalk request retry loop ended unexpectedly")
 
 
+
 def send_to_ktalk_message(
     text: str,
     trigger_time: str,
