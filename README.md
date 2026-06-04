@@ -145,8 +145,12 @@ Dry-run режим инвайтов включен. Пользователей �
 - `KTALK_BOT_USER`
 - `KTALK_JWT_TOKEN`
 - `KTALK_ROOM_ID`
-- `KTALK_REQUEST_RETRIES` — сколько попыток делать для KTalk HTTP-вызовов
+- `KTALK_SEND_MESSAGE_RETRIES` — сколько попыток делать для небезопасной отправки `send_message`; по умолчанию `1`, чтобы не дублировать сообщение при неоднозначном HTTP 5xx/timeout
+- `KTALK_SAFE_REQUEST_RETRIES` — сколько попыток делать для безопасных KTalk HTTP-вызовов, например GET-запросов
+- `KTALK_REQUEST_RETRIES` — обратная совместимость для старых импортов; новые места должны использовать настройки выше
 - `KTALK_RETRY_DELAY_SECONDS` — задержка между попытками (например, `5` секунд)
+- `KTALK_SEND_MESSAGE_TIMEOUT` — timeout для небезопасной отправки сообщений; по умолчанию `(10, 60)`, где `10` секунд на подключение и `60` секунд на чтение ответа
+- `KTALK_SAFE_REQUEST_TIMEOUT` — timeout для безопасных KTalk-запросов; по умолчанию `30` секунд
 - `KTALK_THREAD_LINK_REQUIRED_PREFIX` — обязательный prefix ссылки для Jira-валидации
 - `KTALK_THREAD_WEB_URL_TEMPLATE` — шаблон web-ссылки на KTalk-тред
 

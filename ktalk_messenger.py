@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import time
+from html import escape
 from typing import Any
+from uuid import uuid4
 from urllib.parse import quote
 
 import requests
@@ -70,10 +72,62 @@ def _safe_bot_endpoint(endpoint: str) -> str:
     return f"{base}/_matrix/client/strangler/api/v1/bot/***/{endpoint}"
 
 
-def _bot_request(method: str, endpoint: str, **kwargs: Any) -> requests.Response:
+def _bearer_token() -> str:
+    token = str(cnf.KTALK_BEARER_TOKEN).strip()
+    if token.lower().startswith("bearer "):
+        return token
+    return f"Bearer {token}"
+
+
+def _matrix_send_message_url(room_id: str) -> str:
+    base = str(cnf.KTALK_BASE_URL).rstrip("/")
+    room_path = quote(room_id, safe="")
+    transaction_id = f"autoalerter-{int(time.time() * 1000)}-{uuid4().hex}"
+    return f"{base}/_matrix/client/r0/rooms/{room_path}/send/m.room.message/{transaction_id}"
+
+
+def _ktalk_json_headers(include_authorization: bool = False) -> dict[str, str]:
+    headers = {
+        "content-type": "application/json",
+        "host": str(cnf.KTALK_HOST).strip(),
+        "origin": str(cnf.KTALK_TALK_HOST).strip(),
+        "accept": "application/json",
+    }
+    if include_authorization:
+        headers["authorization"] = _bearer_token()
+        headers["talk-host"] = str(cnf.KTALK_TALK_HOST).strip()
+    return headers
+
+
+def _ktalk_timeout(setting_name: str, default_timeout: object) -> object:
+    return getattr(cnf, setting_name, default_timeout)
+
+
+def _bot_request(
+    method: str,
+    endpoint: str,
+    *,
+    retry_on_5xx: bool = True,
+    retry_on_network_error: bool = True,
+    **kwargs: Any,
+) -> requests.Response:
     url = _bot_api_url(endpoint)
-    retries = max(int(getattr(cnf, "KTALK_REQUEST_RETRIES", 3)), 1)
+    retries_setting_name = (
+        "KTALK_SAFE_REQUEST_RETRIES"
+        if retry_on_5xx or retry_on_network_error
+        else "KTALK_SEND_MESSAGE_RETRIES"
+    )
+    retries = max(
+        int(getattr(cnf, retries_setting_name, getattr(cnf, "KTALK_REQUEST_RETRIES", 3))),
+        1,
+    )
     retry_delay_seconds = float(getattr(cnf, "KTALK_RETRY_DELAY_SECONDS", 5))
+    timeout_setting_name = (
+        "KTALK_SAFE_REQUEST_TIMEOUT"
+        if retry_on_5xx or retry_on_network_error
+        else "KTALK_SEND_MESSAGE_TIMEOUT"
+    )
+    request_timeout = _ktalk_timeout(timeout_setting_name, getattr(cnf, "REQUEST_TIMEOUT", 30))
 
     for attempt in range(1, retries + 1):
         try:
@@ -81,11 +135,11 @@ def _bot_request(method: str, endpoint: str, **kwargs: Any) -> requests.Response
                 method,
                 url,
                 verify=cnf.VERIFY_SSL,
-                timeout=cnf.REQUEST_TIMEOUT,
+                timeout=request_timeout,
                 **kwargs,
             )
         except requests.RequestException as error:
-            if attempt < retries:
+            if retry_on_network_error and attempt < retries:
                 logger.warning(
                     "KTalk request failed on attempt %s/%s, retry in %s seconds: %s",
                     attempt,
@@ -95,10 +149,13 @@ def _bot_request(method: str, endpoint: str, **kwargs: Any) -> requests.Response
                 )
                 time.sleep(retry_delay_seconds)
                 continue
-            logger.error("KTalk request failed after all retries: %s", error)
+            if retry_on_network_error:
+                logger.error("KTalk request failed after all retries: %s", error)
+            else:
+                logger.error("KTalk request failed without retry: %s", error)
             raise
 
-        if response.status_code >= 500 and attempt < retries:
+        if response.status_code >= 500 and retry_on_5xx and attempt < retries:
             logger.warning(
                 "KTalk request failed on attempt %s/%s with status=%s, retry in %s seconds",
                 attempt,
@@ -152,14 +209,46 @@ def send_to_ktalk_message(
         _safe_bot_endpoint("send_message"),
     )
 
+    if mentions:
+        message_kind = "mention"
+    elif thread_id:
+        message_kind = "thread_reply"
+    else:
+        message_kind = "thread_root"
+
     try:
-        response = _bot_request("POST", "send_message", json=payload)
+        response = _bot_request(
+            "POST",
+            "send_message",
+            retry_on_5xx=False,
+            retry_on_network_error=False,
+            headers=_ktalk_json_headers(),
+            json=payload,
+        )
     except requests.RequestException:
+        logger.error(
+            "KTalk send_message returned ambiguous result; automatic retry disabled to avoid duplicate message "
+            "endpoint=send_message room_id=%s thread_id=%s message_kind=%s status_code=%s",
+            room_id,
+            thread_id,
+            message_kind,
+            None,
+        )
         return None
 
     if not response.ok:
         status = response.status_code
-        logger.error("Kontur Talk send failed status=%s", status)
+        if status >= 500:
+            logger.error(
+                "KTalk send_message returned ambiguous result; automatic retry disabled to avoid duplicate message "
+                "endpoint=send_message room_id=%s thread_id=%s message_kind=%s status_code=%s",
+                room_id,
+                thread_id,
+                message_kind,
+                status,
+            )
+        else:
+            logger.error("Kontur Talk send failed status=%s", status)
         return None
 
     try:
@@ -181,7 +270,7 @@ def create_discussion(
     reply: str,
     jira_key: str,
     trigger_time: str,
-) -> str:
+) -> str | None:
     room_id = cnf.KTALK_ROOM_ID
     jira_issue_url = cnf.JIRA_ISSUE_BROWSE_URL.format(jira_key)
 
@@ -206,7 +295,13 @@ def create_discussion(
         thread_id=None,
     )
     if not thread_root_event_id:
-        raise RuntimeError("Failed to send first incident message to Kontur Talk")
+        logger.error(
+            "KTalk discussion root was not confirmed; continue incident flow without thread id "
+            "room_id=%s jira_key=%s",
+            room_id,
+            jira_key,
+        )
+        return None
 
     thread_message = (
         f"Сервис: {full_name}\n"
@@ -244,26 +339,67 @@ def mention_users_in_thread(
             logger.warning("Skip mention: empty mention_id for login=%s", ad_login)
             continue
 
-        mention_text = f"Ответственный: {full_name} {mention_id}".strip()
-
-        event_id = send_to_ktalk_message(
-            mention_text,
-            "",
-            room_id,
-            event="1",
-            thread_id=thread_root_event_id,
-            mentions=[mention_id],
-            message_format="plain",
-            decorate_event=False,
+        mention_name = full_name or ad_login or mention_id
+        mention_body = f"{mention_name} "
+        mention_url = (
+            f"{cnf.KTALK_TALK_HOST.rstrip('/')}/app/messenger/#/user/"
+            f"{quote(mention_id, safe='@:$')}"
         )
-        if event_id:
+        payload: dict[str, Any] = {
+            "msgtype": "m.text",
+            "body": mention_body,
+            "format": "org.matrix.custom.html",
+            "formatted_body": f'<a href="{escape(mention_url, quote=True)}">{escape(mention_name)}</a>',
+            "m.mentions": {"user_ids": [mention_id]},
+            "m.relates_to": {
+                "rel_type": "m.thread",
+                "event_id": thread_root_event_id,
+            },
+        }
+
+        try:
+            response = requests.request(
+                "PUT",
+                _matrix_send_message_url(room_id),
+                headers=_ktalk_json_headers(include_authorization=True),
+                json=payload,
+                verify=cnf.VERIFY_SSL,
+                timeout=_ktalk_timeout(
+                    "KTALK_SEND_MESSAGE_TIMEOUT",
+                    getattr(cnf, "REQUEST_TIMEOUT", 30),
+                ),
+            )
+        except requests.RequestException as error:
+            logger.error(
+                "KTalk mention returned ambiguous result; automatic retry disabled to avoid duplicate message "
+                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s error=%s",
+                room_id,
+                thread_root_event_id,
+                mention_id,
+                error,
+            )
+            continue
+
+        if response.ok:
             mentioned += 1
+            continue
+
+        if response.status_code >= 500:
+            logger.error(
+                "KTalk mention returned ambiguous result; automatic retry disabled to avoid duplicate message "
+                "endpoint=matrix_send_message room_id=%s thread_id=%s user_id=%s status_code=%s",
+                room_id,
+                thread_root_event_id,
+                mention_id,
+                response.status_code,
+            )
         else:
             logger.warning(
-                "KTalk mention failed room_id=%s thread_id=%s login=%s",
+                "KTalk mention failed room_id=%s thread_id=%s login=%s status=%s",
                 room_id,
                 thread_root_event_id,
                 ad_login,
+                response.status_code,
             )
 
     return mentioned
